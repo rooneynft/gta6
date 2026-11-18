@@ -3,17 +3,210 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Meridian Heat — Open-World Crime in Port Meridian</title>
+<link rel="icon" href="data:,">
+<title>Vice Shores — Open-World Crime in the Sun</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #14121e; }
+  :root {
+    --panel: rgba(16, 18, 22, 0.82);
+    --panel-line: rgba(242, 237, 228, 0.16);
+    --text: #f2ede4;
+    --muted: #b9b2a4;
+    --accent: #ffb03a;
+    --danger: #e5534b;
+    --good: #5ec97a;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14161a; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text); }
   #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+  #hud { position: fixed; inset: 0; pointer-events: none; display: none; font-size: 14px; }
+  #hud.on { display: block; }
+  .panel { background: var(--panel); border: 1px solid var(--panel-line); border-radius: 10px; backdrop-filter: blur(4px); }
+
+  #stats { position: absolute; top: 16px; left: 16px; padding: 12px 16px; min-width: 208px; }
+  #cash { font-family: var(--mono); font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent); line-height: 1.1; }
+  #cash-label { font-size: 11px; color: var(--muted); letter-spacing: 0.04em; margin-top: 2px; }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  .bar-row .bar-label { font-size: 11px; color: var(--muted); width: 44px; }
+  .bar { flex: 1; height: 8px; border-radius: 4px; background: rgba(242, 237, 228, 0.14); overflow: hidden; }
+  .bar > div { height: 100%; border-radius: 4px; }
+  #health-fill { background: var(--good); width: 100%; }
+  #armor-fill { background: #6aa8d8; width: 0%; }
+  #health-text { font-family: var(--mono); font-size: 12px; width: 28px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  #wanted { position: absolute; top: 16px; right: 16px; padding: 10px 16px; text-align: right; }
+  #stars { font-size: 20px; letter-spacing: 2px; color: var(--muted); line-height: 1; }
+  #stars.hot { color: var(--danger); }
+  #clock { font-family: var(--mono); font-size: 16px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  #clock-label { font-size: 11px; color: var(--muted); }
+
+  #mission { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); padding: 10px 18px; max-width: 460px; text-align: center; }
+  #mission-title { font-weight: 600; font-size: 14px; }
+  #mission-objective { font-size: 13px; color: var(--muted); margin-top: 3px; }
+  #mission-meta { display: flex; gap: 16px; justify-content: center; margin-top: 4px; font-family: var(--mono); font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+  #minimap-wrap { position: absolute; left: 16px; bottom: 16px; padding: 8px; }
+  #minimap { display: block; border-radius: 6px; }
+  #minimap-label { font-size: 11px; color: var(--muted); margin-top: 6px; letter-spacing: 0.04em; }
+
+  #drive { position: absolute; right: 16px; bottom: 16px; padding: 12px 16px; text-align: right; min-width: 180px; }
+  #speed { font-family: var(--mono); font-size: 30px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  #speed-unit { font-size: 11px; color: var(--muted); margin-left: 4px; }
+  #radio-name { font-weight: 600; font-size: 13px; margin-top: 6px; }
+  #radio-genre { font-size: 11px; color: var(--muted); }
+
+  #prompt { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 8px 16px; font-size: 13px; background: var(--panel); border: 1px solid var(--panel-line); border-radius: 8px; }
+  #grab-bar { position: absolute; bottom: 64px; left: 50%; transform: translateX(-50%); width: 260px; height: 8px; border-radius: 4px; background: rgba(242,237,228,0.14); overflow: hidden; display: none; }
+  #grab-fill { height: 100%; background: var(--accent); width: 0%; }
+
+  .banner { position: absolute; top: 108px; left: 50%; transform: translateX(-50%); padding: 12px 24px; text-align: center; display: none; border-radius: 10px; background: var(--panel); border: 1px solid var(--panel-line); }
+  .banner.good { border-color: var(--good); }
+  .banner.bad { border-color: var(--danger); }
+  .banner.mission { border-color: var(--accent); }
+  #banner-title { font-weight: 600; font-size: 17px; }
+  #banner-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(10, 12, 14, 0.55); z-index: 10; }
+  .overlay.on { display: flex; }
+  .card { width: 520px; max-width: calc(100vw - 48px); background: #191c20; border: 1px solid var(--panel-line); border-radius: 16px; padding: 32px; }
+  .card h1 { margin: 0; font-size: 40px; letter-spacing: 0.01em; line-height: 1; }
+  .card h1 .vice { color: var(--accent); }
+  .card h2 { margin: 0 0 8px 0; font-size: 24px; }
+  .tagline { color: var(--muted); margin: 10px 0 0 0; font-size: 14px; line-height: 1.5; }
+  .meta-line { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 16px; font-variant-numeric: tabular-nums; }
+  .btn-row { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; }
+  .btn { pointer-events: auto; cursor: pointer; border: 1px solid var(--panel-line); border-radius: 10px; background: #23262b; color: var(--text); font: 600 15px system-ui, sans-serif; padding: 12px 16px; text-align: left; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1408; }
+  .btn.primary:hover { background: #ffc25e; }
+  .btn small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .btn.primary small { color: #5a4318; }
+  .keys { margin-top: 24px; border-top: 1px solid var(--panel-line); padding-top: 16px; font-size: 13px; color: var(--muted); line-height: 1.9; }
+  .keys b { color: var(--text); font-family: var(--mono); font-weight: 600; background: #23262b; border: 1px solid var(--panel-line); border-radius: 5px; padding: 1px 6px; font-size: 12px; }
+  .shop-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; cursor: pointer; background: #23262b; border: 1px solid var(--panel-line); border-radius: 10px; color: var(--text); padding: 12px 14px; font: 500 14px system-ui, sans-serif; }
+  .shop-item:hover { border-color: var(--accent); }
+  .shop-item .name { flex: 1; }
+  .shop-item .name small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .shop-item .price { font-family: var(--mono); color: var(--accent); font-variant-numeric: tabular-nums; }
+  .shop-item .key { font-family: var(--mono); font-size: 12px; color: var(--muted); border: 1px solid var(--panel-line); border-radius: 5px; padding: 1px 7px; }
 </style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js"
+  }
+}
+</script>
 </head>
 <body>
-<canvas id="game" aria-label="Meridian Heat: steal cars, outrun the Meridian PD, and pull off the Meridian Job in Port Meridian"></canvas>
+<canvas id="game" aria-label="Vice Shores: steal cars, outrun the Meridian PD, and pull off the Meridian Job in Vice Shores"></canvas>
 <p id="status" role="status" aria-live="polite"></p>
+
+<div id="hud">
+  <div id="stats" class="panel">
+    <div id="cash">$50</div>
+    <div id="cash-label">Cash</div>
+    <div class="bar-row"><span class="bar-label">Health</span><div class="bar"><div id="health-fill"></div></div><span id="health-text">100</span></div>
+    <div class="bar-row" id="armor-row" style="display:none"><span class="bar-label">Armor</span><div class="bar"><div id="armor-fill"></div></div></div>
+  </div>
+  <div id="wanted" class="panel">
+    <div id="stars">☆☆☆☆☆</div>
+    <div id="clock">09:00</div>
+    <div id="clock-label">Vice Shores</div>
+  </div>
+  <div id="mission" class="panel">
+    <div id="mission-title">Mission 1/8 — First Wheels</div>
+    <div id="mission-objective"></div>
+    <div id="mission-meta"><span id="mission-reward"></span><span id="mission-timer"></span></div>
+  </div>
+  <div id="minimap-wrap" class="panel">
+    <canvas id="minimap" width="200" height="200"></canvas>
+    <div id="minimap-label">VICE SHORES</div>
+  </div>
+  <div id="drive" class="panel">
+    <div><span id="speed">—</span><span id="speed-unit">on foot</span></div>
+    <div id="radio-name">VICE 98.5</div>
+    <div id="radio-genre">R to change station</div>
+  </div>
+  <div id="prompt" style="display:none"></div>
+  <div id="grab-bar"><div id="grab-fill"></div></div>
+  <div id="banner" class="banner"><div id="banner-title"></div><div id="banner-sub"></div></div>
+</div>
+
+<div id="menu" class="overlay on">
+  <div class="card">
+    <h1><span class="vice">VICE</span> SHORES</h1>
+    <p class="tagline">An open-world crime game in the sun-soaked city of Vice Shores. You are Dante “Dagger” Cole, a getaway driver fresh out of prison, working for the fixer Mara Quinn. Steal cars, outrun the Meridian PD, and pull off the Meridian Job.</p>
+    <div class="btn-row">
+      <button class="btn primary" id="btn-new">New game<small>Start the story — Mission 1: First Wheels</small></button>
+      <button class="btn" id="btn-continue">Continue<small id="continue-sub">No save found yet</small></button>
+      <button class="btn" id="btn-howto">How to play<small>Controls, wanted level, radio and shops</small></button>
+    </div>
+    <div class="meta-line">8 story missions · wanted level 0–5 · police helicopter at 3 stars · 3 radio stations · saves locally</div>
+  </div>
+</div>
+
+<div id="howto" class="overlay">
+  <div class="card">
+    <h2>How to play</h2>
+    <div class="keys">
+      <b>W A S D</b> walk / drive &nbsp; <b>Shift</b> run<br>
+      <b>E</b> steal a car, get out, open the shop<br>
+      <b>Mouse</b> aim &nbsp; <b>Click</b> shoot (once you own a pistol)<br>
+      <b>F</b> punch &nbsp; <b>Space</b> handbrake<br>
+      <b>R</b> change radio station &nbsp; <b>M</b> mute<br>
+      <b>P</b> / <b>Esc</b> pause &nbsp; <b>1–4</b> buy in the shop
+    </div>
+    <p class="tagline">Crimes raise your wanted level: the PD sends patrol cars, then officers, then a helicopter at 3 stars. Lay low and the heat cools off. Finish missions to earn cash, spend it at Vice Supplies, and mind your health — getting wasted drops you at the hospital minus 15% of your cash.</p>
+    <div class="btn-row"><button class="btn primary" id="btn-howto-back">Back</button></div>
+  </div>
+</div>
+
+<div id="pause-menu" class="overlay">
+  <div class="card">
+    <h2>Paused</h2>
+    <p class="tagline">Vice Shores waits for no one — except right now.</p>
+    <div class="btn-row">
+      <button class="btn primary" id="btn-resume">Resume</button>
+      <button class="btn" id="btn-save">Save game<small>Progress, cash and mission are kept in this browser</small></button>
+      <button class="btn" id="btn-quit-title">Quit to title</button>
+    </div>
+  </div>
+</div>
+
+<div id="shop-menu" class="overlay">
+  <div class="card">
+    <h2>Vice Supplies</h2>
+    <p class="tagline">Health, ammo and hardware. Cash only, no refunds.</p>
+    <div class="btn-row" id="shop-items"></div>
+    <div class="btn-row"><button class="btn" id="btn-shop-close">Close — E</button></div>
+  </div>
+</div>
+
+<div id="over-menu" class="overlay">
+  <div class="card">
+    <h2>Wasted</h2>
+    <p class="tagline" id="wasted-cause">The Meridian PD got the better of you.</p>
+    <div class="btn-row">
+      <button class="btn primary" id="btn-respawn">Respawn at the hospital<small>−15% cash, wanted level cleared</small></button>
+      <button class="btn" id="btn-over-title">Quit to title</button>
+    </div>
+  </div>
+</div>
+
+<div id="win-menu" class="overlay">
+  <div class="card">
+    <h2>The Meridian Job — done</h2>
+    <p class="tagline">The vault is empty, the helicopter is gone, and Vice Shores is yours. The story is complete — free roam is open, missions can be replayed from the title screen.</p>
+    <div class="btn-row">
+      <button class="btn primary" id="btn-freeroam">Keep playing — free roam</button>
+      <button class="btn" id="btn-win-title">Back to title</button>
+    </div>
+  </div>
+</div>
+
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
