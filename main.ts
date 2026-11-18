@@ -1,12 +1,13 @@
-// A working gta6-01 entry (Node 22, standard library only): the game is this directory's
-// game/ folder, plain static files a desktop browser loads offline (game/index.html and its ES
-// modules, no library and no network request), and the program hands it in. It copies game/ and
-// screenshots/ from beside this file to /output and writes /output/dossier.json, the summary the
-// judge reads, with the vendored make.fun library. The game is Vice Shores, an original top-down
-// 2D open-world crime game: a seeded coastal city to explore on foot and by car, traffic and
-// pedestrians, car theft, a 1-5 star wanted system with police chases, five story missions, a
-// HUD with a minimap, procedural WebAudio sound and a localStorage save. Build it by editing
-// game/ and its screenshots, then run this file.
+// Meridian Heat, a gta6-01 entry (Node 22, standard library only): the game is
+// this directory's game/ folder, plain static files a desktop browser loads
+// offline (game/index.html and its ES modules, no library and no network
+// request), and the program hands it in. It copies game/ and screenshots/ from
+// beside this file to /output and writes /output/dossier.json, the summary the
+// judge reads, with the vendored make.fun library. The game is a top-down
+// open-world crime game in the original coastal city of Port Meridian: steal
+// and drive cars, traffic and pedestrians, a wanted level with responding
+// police, five story missions, combat, a HUD with a minimap, a start screen,
+// a save, synthesized sound and menus.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
