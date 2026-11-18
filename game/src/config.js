@@ -1,74 +1,72 @@
-// Every tuning number and colour in one place. The world is a fixed 3200x2400
-// city; the renderer scales a 1280x720 view of it to the window, so no rule
-// below depends on the screen size.
+// Vice Shores — tuning numbers and colours in one place. The city is a
+// fixed 560 by 440 metre grid of roads and blocks; nothing below depends on
+// the screen size, so the same world plays the same on any desktop window.
 
-export const STEP = 1 / 60;
-export const VIEW = { width: 1280, height: 720 };
-export const SAVE_KEY = 'meridian-heat.save.v1';
+export const WORLD = { halfX: 280, halfZ: 220, roadWidth: 16, blockGap: 64 };
+
+/** Road centre lines, east-west roads run along x, north-south along z. */
+export const ROADS_X = [-240, -160, -80, 0, 80, 160, 240];
+export const ROADS_Z = [-180, -120, -60, 0, 60, 120, 180];
+
+/** Named places on the map; every mission marker points at one of these. */
+export const SPOTS = {
+  garage: { x: -240, z: -180, label: "Mara's Garage" },
+  docks: { x: 240, z: 180, label: 'Sunset Docks' },
+  bank: { x: 80, z: 0, label: 'Meridian Bank' },
+  hideout: { x: -240, z: 180, label: 'Hideout' },
+  shop: { x: 160, z: -60, label: 'Vice Supplies' },
+  hospital: { x: -80, z: 180, label: 'Shores Hospital' },
+  park: { x: 0, z: 120, label: 'Palm Park' },
+  pier: { x: 0, z: 205, label: 'South Pier' },
+};
 
 export const PLAYER = {
-  speed: 195,
-  radius: 13,
-  hp: 100,
-  punchRange: 34,
-  punchDamage: 1,
-  shootCooldown: 0.16,
-  bulletSpeed: 780,
+  walkSpeed: 6, runSpeed: 9.5, radius: 0.7, maxHp: 100,
+  punchDamage: 25, punchRange: 2.2, punchCooldown: 0.45,
 };
 
 export const CAR = {
-  accel: 430,
-  brake: 760,
-  reverseMax: 210,
-  maxSpeed: 530,
-  sportsMax: 680,
-  steer: 2.75,
-  drag: 0.55,
-  length: 46,
-  width: 22,
-  hp: 12,
+  accel: 16, brake: 26, reverseMax: 9, drag: 0.55, steer: 1.9,
+  radius: 2.1, maxHp: 100,
 };
 
-export const WANTED_MAX = 5;
-export const HEAT_DECAY_SECONDS = 18;
-export const HEAT_CRIME_WINDOW = 6;
+export const CAR_TYPES = {
+  sedan: { maxSpeed: 23, color: 0x7a8a99, name: 'Sedan' },
+  taxi: { maxSpeed: 25, color: 0xe8b93a, name: 'Taxi' },
+  sports: { maxSpeed: 33, color: 0xd8a018, name: 'Comet GT' },
+  van: { maxSpeed: 19, color: 0x5a7a5a, name: 'Van' },
+  police: { maxSpeed: 30, color: 0x223344, name: 'PD Cruiser' },
+};
+
+export const WANTED = {
+  maxStars: 5, decayIdleSeconds: 10, decayStepSeconds: 6,
+  policeCarsPerStar: 1, heliAtStars: 3,
+};
+
+export const COMBAT = {
+  pistolDamage: 34, pistolRange: 55, pistolCooldown: 0.28, pistolAmmoStart: 24,
+  rivalHp: 68, rivalDamage: 7, rivalRange: 42, rivalShotCooldown: 1.1,
+};
+
+export const ECONOMY = {
+  startCash: 50, pistolPrice: 250, ammoPrice: 50, ammoAmount: 24,
+  healthPrice: 100, armorPrice: 150, pickupCash: 25,
+};
+
+export const RADIO_STATIONS = [
+  { name: 'VICE 98.5', genre: 'Synthwave', bpm: 112, root: 57, scale: [0, 3, 5, 7, 10] },
+  { name: 'ROCK 101', genre: 'Guitar Rock', bpm: 132, root: 45, scale: [0, 3, 5, 6, 7, 10] },
+  { name: 'SUNSET 88.2', genre: 'Chill', bpm: 84, root: 60, scale: [0, 2, 4, 7, 9] },
+];
 
 export const PALETTE = {
-  sand: '#e9c98d',
-  grass: '#8fbf6a',
-  parkGrass: '#79ad58',
-  road: '#3a3844',
-  roadEdge: '#2c2a35',
-  sidewalk: '#cbb98f',
-  lane: '#f5d76e',
-  water: '#2e8fa3',
-  waterDeep: '#1f6f84',
-  buildingRoof: '#ff8a70',
-  buildingRoof2: '#4ecdc4',
-  buildingRoof3: '#ffe66d',
-  buildingRoof4: '#b388eb',
-  buildingRoof5: '#f4a261',
-  buildingWall: '#5d5468',
-  text: '#fff7e8',
-  muted: '#d8c9a3',
-  hudPanel: 'rgba(20, 18, 30, 0.72)',
-  star: '#ffd23f',
-  police: '#2b5cff',
-  policeWhite: '#f2f2f2',
-  player: '#ff5d8f',
-  rival: '#c9184a',
-  cash: '#7ee081',
+  sky: 0x8ec8e8, sun: 0xfff2d8, ground: 0x6f9e5a, sand: 0xe8d29a,
+  water: 0x2e7fa8, asphalt: 0x3a3f46, sidewalk: 0x9aa0a8,
+  buildingGlass: 0x9fd4e8, text: '#f2ede4', muted: '#b9b2a4',
+  accent: '#ffb03a', danger: '#e5534b', good: '#5ec97a',
 };
 
 export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 
-export const DISTRICTS = [
-  { name: 'NORTH HILLS', x0: 0, y0: 0, x1: 3200, y1: 640 },
-  { name: 'THE DOCKS', x0: 2640, y0: 0, x1: 3200, y1: 2240 },
-  { name: 'DOWNTOWN', x0: 1040, y0: 640, x1: 1840, y1: 1440 },
-  { name: 'SOUTH BEACH', x0: 0, y0: 1840, x1: 3200, y1: 2400 },
-  { name: 'OLD PORT', x0: 0, y0: 640, x1: 1040, y1: 1840 },
-  { name: 'SUNSET STRIP', x0: 1840, y0: 640, x1: 2640, y1: 1840 },
-];
-
-export const CAR_COLORS = ['#e63946', '#457b9d', '#f4a261', '#2a9d8f', '#e9c46a', '#6d6875', '#ffb703', '#8ecae6', '#b5838d', '#90be6d'];
+export const SAVE_KEY = 'vice-shores-v3-save';
+export const SHOT_PARAM = 'shot';

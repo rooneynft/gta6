@@ -1,230 +1,180 @@
-// The screenshot scenes behind ?shot=chase|street|mission|start. Each one
+// The screenshot scenes behind ?shot=start|street|chase|mission. Each one
 // plays the real rules forward from a fresh world for a fixed number of
-// steps, steered by a simple autopilot (drive toward the mission marker along
-// the road grid, walk toward the objective, shoot the nearest rival), so the
-// frame is what a short game really looks like and the same seed always gives
-// the same frame.
+// steps, steered by a simple autopilot (drive toward the mission marker
+// along the road grid, shoot the nearest rival), so the frame is what a
+// short game really looks like and the same seed always gives the same
+// frame.
 
-import { STEP } from './config.js';
-import { resetWorld, stepWorld } from './world.js';
-import { addHeat } from './police.js';
-import { startMission } from './missions.js';
-import { makePed, makeTrafficCar } from './traffic.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN } from './render.js';
+import { ROADS_X, ROADS_Z, SPOTS } from './config.js';
+import { angleDiff } from './random.js';
+import { createFakeInput } from './input.js';
+import { stepAttract, stepWorld } from './world.js';
+import { startMission, updateMissionObjective } from './missions.js';
+import { enterCar } from './player.js';
 
-/** A fake input object the autopilot drives instead of a keyboard. */
-function fakeInput() {
-  const keys = { up: false, down: false, left: false, right: false };
-  const mouse = { x: 640, y: 360, down: false };
-  return {
-    keysState: keys,
-    mouseState: mouse,
-    move() {
-      const x = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
-      const y = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
-      const len = Math.hypot(x, y) || 1;
-      return { x: x / len, y: y / len, active: x !== 0 || y !== 0 };
-    },
-    keys() {
-      return keys;
-    },
-    isHandbrake() {
-      return false;
-    },
-    mouse() {
-      return mouse;
-    },
-    takeActions() {
-      return 0;
-    },
-  };
+const STEP = 1 / 60;
+
+function runSteps(world, input, seconds, steer) {
+  const steps = Math.floor(seconds / STEP);
+  for (let i = 0; i < steps; i += 1) {
+    if (steer) steer(input, world);
+    stepWorld(world, input, STEP, null, null);
+    if (world.player.hp <= 0) break;
+  }
 }
 
-function driveToward(input, world, tx, ty) {
+/** Drive toward a point along the road grid, like a local would. */
+function driveToward(input, world, tx, tz) {
   const car = world.player.car;
   if (!car) return;
-  // Route along the road grid (Manhattan): stay on the current road until the
-  // crossing road nearest the target, then turn onto it.
-  const ROADS_V = [240, 640, 1040, 1440, 1840, 2240, 2640, 2960];
-  const ROADS_H = [240, 640, 1040, 1440, 1840, 2080];
   const nearest = (list, v) => list.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a));
-  const targetRoadY = nearest(ROADS_H, ty);
-  const targetRoadX = nearest(ROADS_V, tx);
+  const targetRoadZ = nearest(ROADS_Z, tz);
+  const targetRoadX = nearest(ROADS_X, tx);
+  const onV = ROADS_X.some((rx) => Math.abs(car.x - rx) < 12);
+  const onH = ROADS_Z.some((rz) => Math.abs(car.z - rz) < 12);
   let wx = tx;
-  let wy = ty;
-  const onV = ROADS_V.some((rx) => Math.abs(car.x - rx) < 50);
-  const onH = ROADS_H.some((ry) => Math.abs(car.y - ry) < 50);
+  let wy = tz;
   if (onV) {
-    // Along the vertical road toward the target's horizontal road; turn early.
-    if (Math.abs(car.y - targetRoadY) > 160) {
-      wx = nearest(ROADS_V, car.x);
-      wy = targetRoadY;
+    // Stay on this road until the crossing is close, then turn onto it:
+    // aiming at the target too early cuts the corner through a block.
+    if (Math.abs(car.z - targetRoadZ) > 14) {
+      wx = nearest(ROADS_X, car.x);
+      wy = targetRoadZ;
     } else {
       wx = targetRoadX;
-      wy = targetRoadY;
+      wy = targetRoadZ;
     }
   } else if (onH) {
-    if (Math.abs(car.x - targetRoadX) > 160) {
+    if (Math.abs(car.x - targetRoadX) > 14) {
       wx = targetRoadX;
-      wy = nearest(ROADS_H, car.y);
+      wy = nearest(ROADS_Z, car.z);
     } else {
       wx = tx;
-      wy = ty;
+      wy = tz;
     }
   } else {
-    // Off the grid: head for the nearest road point first.
-    const p = { x: nearest(ROADS_V, car.x), y: car.y };
-    const q = { x: car.x, y: nearest(ROADS_H, car.y) };
-    if (Math.abs(p.x - car.x) < Math.abs(q.y - car.y)) {
+    const p = { x: nearest(ROADS_X, car.x), z: car.z };
+    const q = { x: car.x, z: nearest(ROADS_Z, car.z) };
+    if (Math.abs(p.x - car.x) < Math.abs(q.z - car.z)) {
       wx = p.x;
-      wy = p.y;
+      wy = p.z;
     } else {
       wx = q.x;
-      wy = q.y;
+      wy = q.z;
     }
   }
   const dx = wx - car.x;
-  const dy = wy - car.y;
-  const dist = Math.hypot(dx, dy);
-  const want = Math.atan2(dy, dx);
-  let diff = want - car.angle;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  const k = input.keysState;
-  // Brake before a sharp turn and only accelerate once roughly aligned, so
-  // the car turns at the intersection instead of cutting through a block.
-  k.up = dist > 60 && Math.abs(diff) < 0.5;
-  k.down = Math.abs(diff) > 0.9 && Math.abs(car.speed) > 200;
-  k.left = diff < -0.12;
-  k.right = diff > 0.12;
-  // Stuck against something: only after pushing forward without moving for a
-  // while — never at a standstill, where the car has simply not started yet.
-  if (k.up && Math.abs(car.speed) < 12 && dist > 60) {
+  const dz = wy - car.z;
+  const dist = Math.hypot(dx, dz);
+  const want = Math.atan2(dx, dz);
+  const diff = angleDiff(car.angle, want);
+  const k = input.keys;
+  // Keep rolling while turning: a car can only steer once it moves, so
+  // never cut the throttle for a big angle — brake instead, and only when
+  // already fast, so the turn happens at the intersection.
+  if (Math.abs(diff) > 0.9 && Math.abs(car.speed) > 8) {
+    k.delete('up');
+    k.add('down');
+  } else {
+    k.add('up');
+    k.delete('down');
+  }
+  if (diff > 0.12) { k.add('left'); k.delete('right'); }
+  else if (diff < -0.12) { k.add('right'); k.delete('left'); }
+  else { k.delete('left'); k.delete('right'); }
+  if (dist < 30) k.delete('up');
+  // Stuck against a wall: reverse out with opposite lock, then carry on.
+  if (k.has('up') && Math.abs(car.speed) < 3 && dist > 40) {
     input.stuckTimer = (input.stuckTimer || 0) + STEP;
   } else {
     input.stuckTimer = 0;
   }
   if (input.stuckTimer > 1.2) {
     input.stuckTimer = 0;
-    k.up = false;
-    k.down = true;
-    k.left = !k.left;
-    k.right = !k.right;
+    k.delete('up');
+    k.add('down');
+    if (k.has('left')) { k.delete('left'); k.add('right'); }
+    else if (k.has('right')) { k.delete('right'); k.add('left'); }
+    input.reverseUntil = (input.reverseUntil || 0) + 1;
   }
-}
-
-function walkToward(input, world, tx, ty) {
-  const p = world.player;
-  const dx = tx - p.x;
-  const dy = ty - p.y;
-  const k = input.keysState;
-  k.up = dy < -24;
-  k.down = dy > 24;
-  k.left = dx < -24;
-  k.right = dx > 24;
-}
-
-function shootNearestRival(input, world) {
-  const player = world.player;
-  let best = null;
-  let bestD = 520;
-  for (const rival of world.combat.rivals) {
-    const d = Math.hypot(rival.x - player.x, rival.y - player.y);
-    if (d < bestD) {
-      bestD = d;
-      best = rival;
-    }
-  }
-  if (!best) {
-    input.mouseState.down = false;
-    return;
-  }
-  input.mouseState.x = best.x - world.camera.x + 640;
-  input.mouseState.y = best.y - world.camera.y + 360;
-  input.mouseState.down = true;
-}
-
-function runSteps(world, input, seconds) {
-  const steps = Math.floor(seconds / STEP);
-  for (let i = 0; i < steps; i += 1) {
-    stepWorld(world, input, STEP);
-    if (world.player.hp <= 0) break;
+  if (input.reverseUntil > 0) {
+    input.reverseUntil -= STEP;
+    k.delete('up');
+    k.add('down');
+    if (input.reverseUntil <= 0) k.delete('down');
   }
 }
 
 /**
  * Set `world` to the named scene and return the screen to draw over it.
- * Any name other than chase/street/mission is the title scene.
+ * Any name other than street/chase/mission is the title scene.
  */
+function w_rivalsLeft(world) {
+  return world.rivals.some((r) => r.alive);
+}
+
 export function stageShot(name, world) {
-  resetWorld(world);
-  const input = fakeInput();
+  const input = createFakeInput();
   if (name === 'chase') {
-    // Mission 4 in full flight: the yellow Comet GT, 3-star heat, patrol cars
-    // on the tail, driving for the hideout.
+    // Mission 4 in full flight: the gold Comet GT, 3-star heat, patrol cars
+    // on the tail and the police helicopter overhead, driving for the hideout.
     startMission(world, 3);
-    const gt = world.traffic.find((c) => c.sports);
+    const gt = world.cars.find((c) => c.type === 'sports');
     world.player.x = gt.x;
-    world.player.y = gt.y;
-    gt.kind = 'player';
-    gt.maxSpeed = 680;
-    world.traffic.splice(world.traffic.indexOf(gt), 1);
-    world.player.car = gt;
+    world.player.z = gt.z;
+    enterCar(world, gt);
     world.mission.step = 1;
-    addHeat(world, 3, 'grand theft auto');
-    world.mission.objective = 'Lose the heat, then reach the hideout';
-    world.mission.marker = { ...world.city.spots.hideout };
-    for (let i = 0; i < 9 / STEP; i += 1) {
-      driveToward(input, world, world.city.spots.hideout.x, world.city.spots.hideout.y);
-      stepWorld(world, input, STEP);
-      if (world.player.hp <= 0) break;
-    }
-    return { screen: SCREEN_PLAY, best: world.player.cash };
+    updateMissionObjective(world);
+    world.setWanted(3, 'grand theft auto');
+    runSteps(world, input, 9, (inp, w) => driveToward(inp, w, SPOTS.hideout.x, SPOTS.hideout.z));
+    return 'play';
   }
   if (name === 'street') {
-    // On foot in Downtown, traffic and pedestrians all around. A few extra
-    // cars and walkers are staged on the nearby roads so the frame is busy.
-    world.player.x = 1440;
-    world.player.y = 1040;
-    world.camera.x = 1440;
-    world.camera.y = 1040;
-    for (const spot of [
-      { x: 1440, y: 800, vertical: true },
-      { x: 1440, y: 1300, vertical: true },
-      { x: 1200, y: 1040, vertical: false },
-      { x: 1700, y: 1040, vertical: false },
-    ]) {
-      const car = makeTrafficCar(world.city, world.rand, spot.x, spot.y, spot.vertical, 1);
-      world.traffic.push(car);
-    }
-    for (let i = 0; i < 5; i += 1) {
-      world.peds.push(makePed(world.city, world.rand,
-        1440 + (world.rand() - 0.5) * 500, 1040 + (world.rand() - 0.5) * 300));
-    }
-    runSteps(world, input, 2);
-    for (let i = 0; i < 6 / STEP; i += 1) {
-      walkToward(input, world, 1840, 1040);
-      stepWorld(world, input, STEP);
-    }
-    return { screen: SCREEN_PLAY, best: 0 };
+    // On foot in Downtown at rush hour: mission 1 active, traffic and
+    // pedestrians all around, a stealable sedan at the kerb.
+    startMission(world, 0);
+    world.player.x = 0;
+    world.player.z = 0;
+    world.cameraYaw = Math.PI * 0.75;
+    runSteps(world, input, 3);
+    return 'play';
   }
   if (name === 'mission') {
     // Mission 3: the dockside payback, pistol out, rivals engaging.
+    // The mission is held here so the frame stays in the fight.
+    world.holdMission = true;
     startMission(world, 2);
     world.player.hasPistol = true;
-    world.player.x = world.city.spots.docks.x - 100;
-    world.player.y = world.city.spots.docks.y;
-    // One step inside the docks marker spawns the four rivals.
-    stepWorld(world, input, STEP);
-    for (let i = 0; i < 2.0 / STEP; i += 1) {
-      shootNearestRival(input, world);
-      stepWorld(world, input, STEP);
-      if (world.player.hp <= 0) break;
+    world.player.ammo = 60;
+    world.player.x = SPOTS.docks.x - 4;
+    world.player.z = SPOTS.docks.z + 8;
+    stepWorld(world, input, STEP, null, null);
+    runSteps(world, input, 1.6, (inp, w) => {
+      const rival = w.rivals.find((r) => r.alive);
+      if (rival) {
+        w.autoAim = { x: rival.x, z: rival.z };
+        inp.mouse.down = true;
+      } else {
+        w.autoAim = null;
+        inp.mouse.down = false;
+      }
+    });
+    // If the fight already ended, stage it fresh with rivals alive.
+    if (!w_rivalsLeft(world)) {
+      world.holdMission = true;
+      startMission(world, 2);
+      world.player.hasPistol = true;
+      world.player.ammo = 60;
+      world.player.x = SPOTS.docks.x - 4;
+      world.player.z = SPOTS.docks.z + 8;
+      stepWorld(world, input, STEP, null, null);
+      stepWorld(world, input, STEP, null, null);
     }
-    return { screen: SCREEN_PLAY, best: world.player.cash };
+    return 'play';
   }
-  // Title: the city alive behind the menu.
+  // Title: the city alive behind the menu, camera orbiting.
   world.attract = true;
-  runSteps(world, input, 5);
-  return { screen: SCREEN_TITLE, best: 0 };
+  const steps = Math.floor(6 / STEP);
+  for (let i = 0; i < steps; i += 1) stepAttract(world, STEP);
+  return 'title';
 }

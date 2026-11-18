@@ -1,217 +1,268 @@
-// The story: five missions for the fixer Mara Quinn, then free roam. Each
-// mission is a short chain of steps — go somewhere, steal something, fight
-// someone, lose the heat — with a briefing, a live objective line, a map
-// marker and a cash reward.
+// The story of Vice Shores: eight missions for Dante "Dagger" Cole, run in
+// order for the fixer Mara Quinn. Each mission is a short list of steps —
+// reach a place, steal a car, defeat rivals, buy from the shop, grab the
+// cash — and each pays out when its last step is done.
 
-import { spawnCash, spawnHealth, spawnPistol, spawnRival } from './combat.js';
-import { addHeat } from './police.js';
+import { SPOTS } from './config.js';
+
+export const MISSION_COUNT = 8;
 
 export const MISSIONS = [
   {
-    id: 'wheels-up',
-    title: '1 — WHEELS UP',
-    briefing: 'Mara Quinn: "Dagger, you\'re out. I need wheels and a driver. Jack any car on the street and bring it to my garage."',
-    reward: 150,
-  },
-  {
-    id: 'courier',
-    title: '2 — COURIER RUN',
-    briefing: 'Mara: "Package job. Grab the parcel at the garage and run it to the Marina drop. Seventy-five seconds — the buyer doesn\'t wait."',
+    title: 'First Wheels', brief: 'Mara needs wheels. Steal a car, then bring it to her garage.',
     reward: 300,
+    steps: [
+      { type: 'stealCar', objective: 'Steal a car — walk up to one and press E' },
+      { type: 'goto', spot: 'garage', objective: "Drive to Mara's Garage" },
+    ],
   },
   {
-    id: 'payback',
-    title: '3 — PAYBACK AT THE DOCKS',
-    briefing: 'Mara: "The Harbor Kings taxed my crew. Four of their boys are drinking at the docks. Send a message — and bring back their cash."',
-    reward: 600,
+    title: 'Courier Run', brief: 'Three drops, one afternoon. The clients do not wait.',
+    reward: 450,
+    steps: [
+      { type: 'gotoMulti', spots: ['docks', 'shop', 'hospital'], timer: 180, objective: 'Deliver the packages' },
+    ],
   },
   {
-    id: 'hot-wheels',
-    title: '4 — HOT WHEELS',
-    briefing: 'Mara: "A Comet GT is parked on Meridian Ave — yellow, can\'t miss it. Take it, shake the heat, and stash it at the hideout."',
+    title: 'Dockside Payback', brief: 'The Harbor Kings shorted Mara. Settle it at the docks.',
+    reward: 600, grantsPistol: true,
+    steps: [
+      { type: 'goto', spot: 'docks', objective: 'Go to the Sunset Docks' },
+      { type: 'defeat', count: 4, spawnAt: 'docks', objective: 'Deal with the Harbor Kings (4 left)' },
+    ],
+  },
+  {
+    title: 'Hot Wheels', brief: 'A gold Comet GT is parked downtown. Take it, lose the heat, hide it.',
+    reward: 800,
+    steps: [
+      { type: 'stealSports', objective: 'Steal the gold Comet GT downtown' },
+      { type: 'goto', spot: 'hideout', objective: 'Deliver the Comet to the Hideout' },
+    ],
+  },
+  {
+    title: 'Vice Supplies', brief: 'Mara wants you patched up before the big jobs. Buy a medkit.',
     reward: 500,
+    steps: [
+      { type: 'goto', spot: 'shop', objective: 'Go to Vice Supplies' },
+      { type: 'buy', kind: 'health', objective: 'Buy a medkit at Vice Supplies (press E, then buy)' },
+    ],
   },
   {
-    id: 'meridian-job',
-    title: '5 — THE MERIDIAN JOB',
-    briefing: 'Mara: "The big one. Hit Meridian Bank, grab the vault cash, and get to the hideout. The whole PD will be on you. Make it count, Dagger."',
-    reward: 2000,
+    title: 'Three Packages', brief: 'Three stashes, three corners of the city. Collect them all.',
+    reward: 700,
+    steps: [
+      { type: 'collect', spots: ['park', 'bank', 'pier'], objective: 'Collect the stashes' },
+    ],
+  },
+  {
+    title: 'The Getaway', brief: 'The PD is on you. Lose them and reach the hideout.',
+    reward: 1000, setWanted: 3,
+    steps: [
+      { type: 'escape', spot: 'hideout', objective: 'Reach the Hideout with the PD on your tail' },
+    ],
+  },
+  {
+    title: 'The Meridian Job', brief: 'The bank. The vault. The whole city watching. Then vanish.',
+    reward: 1500,
+    steps: [
+      { type: 'goto', spot: 'bank', objective: 'Go to Meridian Bank' },
+      { type: 'grab', objective: 'Grab the cash — hold E at the bank' },
+      { type: 'escape', spot: 'hideout', objective: 'Escape to the Hideout' },
+    ],
   },
 ];
 
-export function createMissionState() {
-  return {
-    index: 0,
-    step: 0,
-    timer: 0,
-    objective: 'Meet Mara Quinn',
-    marker: null,
-    banner: '',
-    bannerTimer: 0,
-    done: false,
-    rivalsSpawned: false,
-    vaultTimer: 0,
-    startCash: 0,
-    failed: '',
+export function startMission(world, index) {
+  const def = MISSIONS[index];
+  world.mission = {
+    index, step: 0, def, status: 'active',
+    timer: def.steps[0].timer || 0, subIndex: 0, grabProgress: 0,
+    spawned: false,
   };
+  if (def.grantsPistol && !world.player.hasPistol) {
+    world.player.hasPistol = true;
+    world.player.ammo = Math.max(world.player.ammo, 24);
+  }
+  if (def.setWanted) world.setWanted(def.setWanted, 'the job');
+  updateMissionObjective(world);
+  world.banner = { text: `Mission ${index + 1}: ${def.title}`, sub: def.brief, kind: 'mission', until: world.elapsed + 4 };
 }
 
-function setObjective(world, text, marker) {
-  world.mission.objective = text;
-  world.mission.marker = marker || null;
+export function updateMissionObjective(world) {
+  const m = world.mission;
+  if (!m || m.status !== 'active') return;
+  const step = m.def.steps[m.step];
+  m.objective = step.objective;
+  m.marker = markerForStep(world, step, m);
+  if (step.type === 'defeat') {
+    const left = world.rivals.filter((r) => r.alive).length;
+    m.objective = `Deal with the Harbor Kings (${left} left)`;
+  }
+  if (step.type === 'gotoMulti' || step.type === 'collect') {
+    const spots = step.spots;
+    const next = spots[m.subIndex];
+    m.objective = `${step.objective} (${m.subIndex}/${spots.length}) — next: ${SPOTS[next].label}`;
+    m.marker = SPOTS[next];
+  }
+  if (step.type === 'escape') m.marker = SPOTS[step.spot];
 }
 
-function showBanner(world, text) {
-  world.mission.banner = text;
-  world.mission.bannerTimer = 3.2;
+function markerForStep(world, step, m) {
+  if (step.type === 'goto' || step.type === 'escape') return SPOTS[step.spot];
+  if (step.type === 'defeat') return SPOTS[step.spawnAt];
+  if (step.type === 'gotoMulti' || step.type === 'collect') return SPOTS[step.spots[m.subIndex]];
+  if (step.type === 'grab') return SPOTS.bank;
+  if (step.type === 'stealSports') return { x: 4, z: -100, label: 'Comet GT' };
+  return null;
+}
+
+function advanceStep(world) {
+  const m = world.mission;
+  m.step += 1;
+  m.subIndex = 0;
+  m.grabProgress = 0;
+  m.spawned = false;
+  if (m.step >= m.def.steps.length) {
+    completeMission(world);
+    return;
+  }
+  m.timer = m.def.steps[m.step].timer || 0;
+  updateMissionObjective(world);
 }
 
 function completeMission(world) {
-  const m = MISSIONS[world.mission.index];
-  world.player.cash += m.reward;
-  world.stats.missionsDone += 1;
-  showBanner(world, `MISSION COMPLETE — ${m.title}  +$${m.reward}`);
-  world.audio.jingle();
-  world.events.missionDone = m.title;
-  world.mission.index += 1;
-  world.mission.step = 0;
-  world.mission.rivalsSpawned = false;
-  if (world.mission.index >= MISSIONS.length) {
-    world.mission.done = true;
-    setObjective(world, 'Story complete — Port Meridian is yours. Free roam!', null);
-    world.events.win = true;
-  } else {
-    startMission(world, world.mission.index);
+  const m = world.mission;
+  m.status = 'done';
+  world.player.cash += m.def.reward;
+  world.audio.cash();
+  world.audio.missionDone();
+  world.banner = {
+    text: `Mission complete: ${m.def.title}`,
+    sub: `+$${m.def.reward} — next job incoming`,
+    kind: 'good', until: world.elapsed + 4,
+  };
+  world.setWanted(0, 'clean getaway');
+  world.saveSoon = true;
+  if (m.index + 1 >= MISSION_COUNT) {
+    world.storyDone = true;
+    world.screen = 'win';
+    return;
   }
+  // The next job starts after a short in-game breather, not a wall-clock
+  // timer, so staged scenes never jump ahead while a frame is loading.
+  world.pendingMissionIndex = m.index + 1;
+  world.pendingMissionAt = world.elapsed + 2;
 }
 
 function failMission(world, reason) {
-  const m = MISSIONS[world.mission.index];
-  showBanner(world, `FAILED — ${reason}. Restarting: ${m.title}`);
-  world.mission.failed = reason;
-  world.events.missionFailed = reason;
+  const m = world.mission;
+  if (!m || m.status !== 'active') return;
+  m.status = 'failed';
+  world.audio.missionFail();
+  world.banner = { text: `Mission failed: ${m.def.title}`, sub: reason, kind: 'bad', until: world.elapsed + 4 };
+  world.pendingMissionIndex = m.index;
+  world.pendingMissionAt = world.elapsed + 2;
+}
+
+export function resetMission(world) {
+  if (!world.mission) return;
   startMission(world, world.mission.index);
 }
 
-export function startMission(world, index) {
-  const m = MISSIONS[index];
-  const ms = world.mission;
-  ms.index = index;
-  ms.step = 0;
-  ms.timer = 0;
-  ms.rivalsSpawned = false;
-  ms.vaultTimer = 0;
-  ms.startCash = world.player.cash;
-  // Clear leftovers from a failed attempt.
-  world.combat.rivals.length = 0;
-  showBanner(world, m.title);
-  world.events.missionStart = m.title;
-  if (index === 0) {
-    setObjective(world, 'Steal any car (walk up to one, press E)', null);
-  } else if (index === 1) {
-    setObjective(world, 'Pick up the parcel at Mara\'s garage', { ...world.city.spots.garage });
-    spawnPistol(world, world.city.spots.garage.x + 40, world.city.spots.garage.y);
-  } else if (index === 2) {
-    setObjective(world, 'Go to the docks', { ...world.city.spots.docks });
-  } else if (index === 3) {
-    setObjective(world, 'Steal the yellow Comet GT on Meridian Ave', { ...world.city.spots.sportsCar });
-  } else if (index === 4) {
-    setObjective(world, 'Reach Meridian Bank', { ...world.city.spots.bank });
+/** Advance the active mission one frame; call from the world step. */
+export function stepMission(world, input, dt) {
+  const m = world.mission;
+  if (!m) return;
+  if (m.status !== 'active') {
+    // A finished mission hands over to the next one after its breather.
+    if (world.pendingMissionIndex != null && world.elapsed >= world.pendingMissionAt
+      && !world.holdMission) {
+      const next = world.pendingMissionIndex;
+      world.pendingMissionIndex = null;
+      startMission(world, next);
+    }
+    return;
   }
-}
+  const step = m.def.steps[m.step];
+  const p = world.player;
 
-export function updateMissions(world, dt) {
-  const ms = world.mission;
-  const player = world.player;
-  if (ms.done) return;
-  if (ms.bannerTimer > 0) ms.bannerTimer -= dt;
-  const spots = world.city.spots;
-  const near = (spot, radius) => Math.hypot(player.x - spot.x, player.y - spot.y) < radius;
+  if (m.timer > 0) {
+    m.timer -= dt;
+    if (m.timer <= 0) {
+      failMission(world, 'Out of time');
+      return;
+    }
+  }
 
-  if (ms.index === 0) {
-    // Steal a car, then drive it to the garage.
-    if (ms.step === 0 && player.car) {
-      ms.step = 1;
-      setObjective(world, 'Drive to Mara\'s garage', { ...spots.garage });
-    } else if (ms.step === 1 && near(spots.garage, 90)) {
-      completeMission(world);
-    }
-  } else if (ms.index === 1) {
-    if (ms.step === 0 && near(spots.garage, 70)) {
-      ms.step = 1;
-      ms.timer = 75;
-      setObjective(world, 'Deliver the parcel to the Marina — 75s!', { ...spots.marina });
-    } else if (ms.step === 1) {
-      ms.timer -= dt;
-      setObjective(world, `Deliver the parcel to the Marina — ${Math.max(0, Math.ceil(ms.timer))}s`, { ...spots.marina });
-      if (near(spots.marina, 90)) completeMission(world);
-      else if (ms.timer <= 0) failMission(world, 'delivery too slow');
-    }
-  } else if (ms.index === 2) {
-    if (ms.step === 0 && near(spots.docks, 130)) {
-      ms.step = 1;
-      if (!ms.rivalsSpawned) {
-        ms.rivalsSpawned = true;
-        spawnRival(world, spots.docks.x - 90, spots.docks.y - 60);
-        spawnRival(world, spots.docks.x + 70, spots.docks.y - 90);
-        spawnRival(world, spots.docks.x - 40, spots.docks.y + 90);
-        spawnRival(world, spots.docks.x + 110, spots.docks.y + 40);
-        spawnHealth(world, spots.docks.x, spots.docks.y + 160);
+  const near = (spot, dist) =>
+    Math.hypot(p.x - spot.x, p.z - spot.z) < dist;
+
+  switch (step.type) {
+    case 'stealCar':
+      if (p.car) advanceStep(world);
+      break;
+    case 'stealSports':
+      if (p.car && p.car.type === 'sports') {
+        world.setWanted(2, 'grand theft auto');
+        advanceStep(world);
       }
-      setObjective(world, 'Take out the Harbor Kings (0/4)', { ...spots.docks });
-    } else if (ms.step === 1) {
-      const left = world.combat.rivals.length;
-      const down = 4 - left;
-      setObjective(world, `Take out the Harbor Kings (${down}/4)`, { ...spots.docks });
-      if (left === 0) {
-        ms.step = 2;
-        ms.startCash = player.cash;
-        setObjective(world, 'Collect their cash', { ...spots.docks });
+      break;
+    case 'goto':
+      if (near(SPOTS[step.spot], 10)) advanceStep(world);
+      break;
+    case 'gotoMulti': {
+      const spot = SPOTS[step.spots[m.subIndex]];
+      if (near(spot, 9)) {
+        world.audio.pickup();
+        m.subIndex += 1;
+        if (m.subIndex >= step.spots.length) advanceStep(world);
+        else updateMissionObjective(world);
       }
-    } else if (ms.step === 2) {
-      if (player.cash - ms.startCash >= 600) completeMission(world);
-      else setObjective(world, `Collect their cash ($${player.cash - ms.startCash} / $600)`, { ...spots.docks });
+      break;
     }
-  } else if (ms.index === 3) {
-    if (ms.step === 0 && player.car && player.car.sports) {
-      ms.step = 1;
-      addHeat(world, 2, 'grand theft auto');
-      setObjective(world, 'Lose the heat, then reach the hideout', { ...spots.hideout });
-    } else if (ms.step === 1) {
-      if (near(spots.hideout, 100)) {
-        if (world.police.heat === 0) completeMission(world);
-        else setObjective(world, `Lay low at the hideout until the heat cools (${world.police.heat}★)`, { ...spots.hideout });
-      } else {
-        setObjective(world, 'Reach the hideout — stay out of sight to cool off', { ...spots.hideout });
+    case 'collect': {
+      const spot = SPOTS[step.spots[m.subIndex]];
+      if (near(spot, 8)) {
+        world.player.cash += 50;
+        world.audio.pickup();
+        m.subIndex += 1;
+        if (m.subIndex >= step.spots.length) advanceStep(world);
+        else updateMissionObjective(world);
       }
+      break;
     }
-  } else if (ms.index === 4) {
-    if (ms.step === 0 && near(spots.bank, 90)) {
-      ms.step = 1;
-      ms.vaultTimer = 3;
-      setObjective(world, 'Cracking the vault — hold position!', { ...spots.bank });
-    } else if (ms.step === 1) {
-      if (!near(spots.bank, 110)) {
-        ms.step = 0;
-        setObjective(world, 'Reach Meridian Bank', { ...spots.bank });
-      } else {
-        ms.vaultTimer -= dt;
-        setObjective(world, `Cracking the vault — ${Math.max(0, Math.ceil(ms.vaultTimer))}s`, { ...spots.bank });
-        if (ms.vaultTimer <= 0) {
-          ms.step = 2;
-          addHeat(world, 3, 'bank robbery');
-          spawnCash(world, player.x + 30, player.y, 800);
-          spawnCash(world, player.x - 30, player.y + 20, 800);
-          setObjective(world, 'Grab the cash and run to the hideout!', { ...spots.hideout });
+    case 'defeat': {
+      if (!m.spawned) {
+        world.spawnRivals(SPOTS[step.spawnAt], step.count);
+        m.spawned = true;
+      }
+      const left = world.rivals.filter((r) => r.alive).length;
+      updateMissionObjective(world);
+      if (left === 0) advanceStep(world);
+      break;
+    }
+    case 'buy':
+      if (world.shopBought === step.kind) {
+        world.shopBought = null;
+        advanceStep(world);
+      }
+      break;
+    case 'grab': {
+      if (near(SPOTS.bank, 8) && input.held('action')) {
+        m.grabProgress += dt;
+        if (m.grabProgress >= 2.5) {
+          world.setWanted(4, 'bank robbery');
+          advanceStep(world);
         }
-      }
-    } else if (ms.step === 2) {
-      if (near(spots.hideout, 100) && world.police.heat === 0) completeMission(world);
-      else if (near(spots.hideout, 100)) {
-        setObjective(world, `At the hideout — cool off (${world.police.heat}★ left)`, { ...spots.hideout });
       } else {
-        setObjective(world, 'Escape to the hideout!', { ...spots.hideout });
+        m.grabProgress = Math.max(0, m.grabProgress - dt * 2);
       }
+      break;
     }
+    case 'escape':
+      if (near(SPOTS[step.spot], 10)) advanceStep(world);
+      break;
+    default:
+      break;
   }
 }
