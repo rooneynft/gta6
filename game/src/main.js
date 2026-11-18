@@ -1,15 +1,18 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s
-// steps (several in a slow frame, none in a fast one), and the renderer paints what is
-// there. The game moves between four screens: title, play, paused and busted.
+// Boot and the one loop: input is read every frame, the world advances in fixed
+// 1/60 s steps (several in a slow frame, none in a fast one), and the renderer
+// paints what is there. The game moves between five screens: title, play,
+// paused, game over and win. Progress saves to localStorage on every mission
+// completion and every pause.
 //
-// ?seed=N fixes the city. ?shot=start|play|drive|busted (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a
-// screenshot. Progress (money and missions done) is saved to localStorage.
-import { BEST_KEY, SAVE_KEY, STEP } from './config.js';
-import { createWorld, EVENT_BUSTED, EVENT_CASH, EVENT_HIT, EVENT_MISSION, EVENT_PUNCH } from './world.js';
-import { ACTION_CONFIRM, ACTION_ENTER, ACTION_MUTE, ACTION_PAUSE, ACTION_PUNCH, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
-import { createAudio } from './audio.js';
+// ?seed=N fixes the city. ?shot=chase|street|mission|start (with &seed=N)
+// stages that scene instead of running the loop, paints it twice and sets
+// window.__shotReady for a screenshot.
+import { SAVE_KEY, STEP } from './config.js';
+import { createRandom } from './random.js';
+import { createWorld, resetWorld, stepWorld, EVENT_BUSTED, EVENT_WASTED, EVENT_WIN } from './world.js';
+import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
+import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN } from './render.js';
+import { startMission } from './missions.js';
 import { stageShot } from './shots.js';
 
 /** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
@@ -22,68 +25,71 @@ const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() 
 
 const canvas = document.getElementById('game');
 const status = document.getElementById('status');
-const errors = document.getElementById('errors');
-window.addEventListener('error', (event) => {
-  if (errors) errors.textContent += `${event.message} @${event.filename || ''}:${event.lineno || ''};`;
-});
-
-const world = createWorld(seed);
+const world = createWorld(createRandom(seed));
 const renderer = createRenderer(canvas);
-const audio = createAudio();
 
 function readSave() {
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
-    if (!raw) return { money: 50, missionIndex: 0 };
-    const save = JSON.parse(raw);
-    return {
-      money: typeof save.money === 'number' ? save.money : 50,
-      missionIndex: typeof save.missionIndex === 'number' ? save.missionIndex : 0,
-    };
+    return raw ? JSON.parse(raw) : null;
   } catch {
-    return { money: 50, missionIndex: 0 };
+    return null;
   }
 }
 
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
-  }
-}
-
-function saveProgress() {
+function writeSave() {
   try {
     window.localStorage.setItem(SAVE_KEY, JSON.stringify({
-      money: world.state.money,
-      missionIndex: world.state.missionIndex,
+      cash: world.player.cash,
+      hp: Math.max(1, Math.ceil(world.player.hp)),
+      hasPistol: world.player.hasPistol,
+      missionIndex: world.mission.done ? 5 : world.mission.index,
+      x: world.player.x,
+      y: world.player.y,
+      kills: world.stats.kills,
+      carsStolen: world.stats.carsStolen,
+      missionsDone: world.stats.missionsDone,
     }));
-    if (world.state.money > readBest()) window.localStorage.setItem(BEST_KEY, String(world.state.money));
   } catch {
     // Storage can be off (private windows): progress then lasts this visit only.
   }
 }
 
-function applySave() {
+function readBest() {
   const save = readSave();
-  world.state.money = save.money;
-  world.state.missionIndex = Math.min(save.missionIndex, 5);
-  if (world.state.missionIndex >= 5) world.state.allDone = true;
-  if (world.state.missionIndex === 4) world.state.wanted = 0;
+  return save ? save.cash : 0;
+}
+
+function applySave(save) {
+  world.player.cash = save.cash || 0;
+  world.player.hp = save.hp || 100;
+  world.player.hasPistol = !!save.hasPistol;
+  world.player.x = save.x ?? world.player.x;
+  world.player.y = save.y ?? world.player.y;
+  world.stats.kills = save.kills || 0;
+  world.stats.carsStolen = save.carsStolen || 0;
+  world.stats.missionsDone = save.missionsDone || 0;
+  const idx = Math.min(save.missionIndex || 0, 4);
+  if (save.missionIndex >= 5) {
+    world.mission.done = true;
+    world.mission.index = 5;
+    world.mission.objective = 'Story complete — Port Meridian is yours. Free roam!';
+  } else {
+    startMission(world, idx);
+  }
+  world.camera.x = world.player.x;
+  world.camera.y = world.player.y;
 }
 
 function runShot(name) {
   const scene = stageShot(name, world);
+  world.best = readBest();
   let painted = 0;
   function paint() {
-    renderer.draw(world.state, scene.screen, scene.best, scene.target);
+    renderer.draw(world, scene.screen, world.time);
     painted += 1;
     if (painted < 2) requestAnimationFrame(paint);
-    else {
-      window.__shotReady = true;
-      document.title = 'shot-ready';
-    }
+    else window.__shotReady = true;
   }
   requestAnimationFrame(paint);
 }
@@ -94,100 +100,114 @@ function runGame() {
   let best = readBest();
   let accumulator = 0;
   let last = performance.now();
+  let continuePressed = false;
+  world.best = best;
+  world.saveExists = !!readSave();
 
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
+  window.addEventListener('keydown', (event) => {
+    if (event.code === 'KeyC' && !event.repeat && screen === SCREEN_TITLE) continuePressed = true;
+  });
+
   function announce(message) {
     status.textContent = message;
   }
 
-  function startGame() {
-    world.reset();
-    applySave();
+  function startGame(fresh) {
+    if (fresh) resetWorld(world);
+    const save = fresh ? null : readSave();
+    if (save) applySave(save);
     accumulator = 0;
     screen = SCREEN_PLAY;
-    audio.unlock();
-    announce('Playing Vice Shores. Steal a car to start the first mission.');
+    world.audio.unlock();
+    announce('Playing Meridian Heat. Follow the gold marker.');
   }
 
-  function endGame() {
+  function endGame(busted) {
+    world.wasBusted = busted;
     screen = SCREEN_OVER;
-    saveProgress();
-    if (world.state.money > best) best = world.state.money;
-    audio.busted();
-    announce(`Busted. Money $${world.state.money}. Best $${best}.`);
+    world.audio.busted();
+    if (world.player.cash > best) {
+      best = world.player.cash;
+      world.best = best;
+    }
+    announce(busted ? 'Busted by the Meridian PD.' : 'Wasted.');
   }
 
   function handleActions() {
     const actions = input.takeActions();
-    if (actions & ACTION_MUTE) {
-      const muted = audio.toggleMute();
-      announce(muted ? 'Sound off.' : 'Sound on.');
+    if (input.takeMute()) {
+      const muted = world.audio.toggleMute();
+      announce(muted ? 'Sound muted.' : 'Sound on.');
     }
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
+    if (continuePressed) {
+      continuePressed = false;
+      if (screen === SCREEN_TITLE && readSave()) startGame(false);
+      return;
+    }
+    if (actions & ACTION_CONFIRM && screen === SCREEN_TITLE) startGame(true);
+    else if (actions & ACTION_CONFIRM && (screen === SCREEN_OVER || screen === SCREEN_WIN)) startGame(true);
     else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
-      announce('Paused.');
+      writeSave();
+      announce('Paused. Progress saved.');
     } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
       screen = SCREEN_PLAY;
       announce('Playing.');
     }
-    return actions;
   }
 
-  function step(actions) {
+  function step() {
     if (screen === SCREEN_TITLE) {
-      world.step(STEP, { x: 0, y: 0, enter: false, punch: false }, true);
+      // The city lives behind the menu.
+      const idle = {
+        move: () => ({ x: 0, y: 0, active: false }),
+        keys: () => ({ up: false, down: false, left: false, right: false }),
+        isHandbrake: () => false,
+        mouse: () => ({ x: 0, y: 0, down: false }),
+        takeActions: () => 0,
+      };
+      stepWorld(world, idle, STEP);
       return;
     }
-    const vector = input.vector();
-    const drive = {
-      x: vector.x,
-      y: vector.y,
-      enter: Boolean(actions & ACTION_ENTER),
-      punch: Boolean(actions & ACTION_PUNCH),
-    };
-    const events = world.step(STEP, drive, false);
-    if (events & EVENT_MISSION) {
-      audio.jingle();
-      saveProgress();
-      if (world.state.money > best) best = world.state.money;
-      announce(world.state.toastText);
+    const events = stepWorld(world, input, STEP);
+    if (world.events.missionDone) {
+      writeSave();
+      if (world.player.cash > best) best = world.player.cash;
     }
-    if (events & EVENT_CASH) audio.cash();
-    if (events & EVENT_PUNCH) audio.punch();
-    if (events & EVENT_HIT) audio.hit();
-    if (events & EVENT_BUSTED) endGame();
+    if (events & EVENT_WASTED) endGame(false);
+    else if (events & EVENT_BUSTED) endGame(true);
+    else if (events & EVENT_WIN) {
+      screen = SCREEN_WIN;
+      writeSave();
+      announce('The Meridian Job is done. Port Meridian is yours.');
+    }
   }
 
   function frame(now) {
     requestAnimationFrame(frame);
     accumulator += Math.min((now - last) / 1000, MAX_FRAME);
     last = now;
-    const actions = handleActions();
+    handleActions();
     if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
       while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step(actions);
+        step();
         accumulator -= STEP;
       }
     } else {
       accumulator = 0;
     }
-    const speed01 = world.state.player.inCar ? Math.abs(world.state.player.inCar.speed) / 360 : 0;
-    if (screen === SCREEN_PLAY) audio.update(STEP, speed01, world.state.siren);
-    else audio.update(STEP, 0, false);
-    renderer.draw(world.state, screen, best, world.currentTarget());
+    renderer.draw(world, screen, world.time);
   }
 
-  // Leaving the tab pauses a running game rather than letting the cops close in unseen.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
+      writeSave();
       announce('Paused.');
     }
   });
 
-  applySave();
-  announce('Vice Shores. Press Space or click to start.');
+  announce('Meridian Heat. Press Enter or click to start.');
   requestAnimationFrame(frame);
 }
 
